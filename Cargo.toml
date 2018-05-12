@@ -1,0 +1,9 @@
+[package]
+name = "rec2mov"
+version = "0.1.0"
+authors = ["Roger Andersen <hexjelly@hexjelly.com>"]
+
+[dependencies]
+elma = "0.1.9"
+pcx = "0.2.0"
+image = "*"
