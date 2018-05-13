@@ -15,8 +15,6 @@ extern crate image;
 extern crate pcx;
 
 use elma::lgr::*;
-// use image::ImageBuffer;
-// use image::png::PNGEncoder;
 use std::iter;
 
 // use std::collections::HashMap;
@@ -26,25 +24,36 @@ fn main() {
     let lgr = LGR::load("Default.lgr").unwrap();
     // let mut pictures: HashMap<String, ?> = HashMap::new();
 
-    for picture in lgr.picture_data.iter().take(1) {
-        println!("{:?}", picture.name);
+    for picture in lgr.picture_data.iter() {
         let mut reader = pcx::Reader::new(picture.data.as_slice()).unwrap();
+        let width = reader.width() as usize;
+        let height = reader.height() as usize;
         // dumb thing requires buffer that is img width, so fill capacity up to length
-        let mut img_buffer = Vec::with_capacity(reader.width() as usize);
-        img_buffer.extend(iter::repeat(0).take(reader.width() as usize));
+        let mut img_buffer: Vec<u8> = iter::repeat(0).take(width).collect();
 
         // iterate through rows in pcx
-        for _y in 0..reader.height() {
+        let mut pcx_pixels = Vec::with_capacity(width * height);
+        for _y in 0..height {
             reader.next_row_paletted(&mut img_buffer).unwrap();
-            for px in img_buffer.iter() {
-                print!("{}", if *px > 100 { "*" } else { "#" });
-            }
-            print!("\n");
+            pcx_pixels.extend_from_slice(&img_buffer);
         }
-        // let image = ImageBuffer::from_raw(width: u32, height: u32, buf: Container);
-        // let png_image: Vec<u8> = vec![];
-        // let pngenc = PNGEncoder::new(png_image);
-        // pngenc.encode(data: &[u8], width: u32, height: u32, color: ColorType);
+
+        let mut palette: Vec<u8> = iter::repeat(0).take(256 * 3).collect();
+        reader.read_palette(&mut palette).unwrap();
+
+        let png_pixels: Vec<_> = pcx_pixels
+            .iter()
+            .flat_map(|b| &palette[*b as usize * 3..*b as usize * 3 + 3])
+            .map(|x| *x)
+            .collect();
+
+        image::save_buffer(
+            picture.name.replace(".pcx", ".png"),
+            &png_pixels,
+            width as u32,
+            height as u32,
+            image::RGB(8),
+        ).unwrap();
     }
     // let opengl = OpenGL::_3_2;
     // let mut gl = GlGraphics::new(opengl);
