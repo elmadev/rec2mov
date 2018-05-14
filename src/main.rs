@@ -22,7 +22,17 @@ use std::iter;
 fn main() {
     // let's start by converting pcx to png
     let lgr = LGR::load("Default.lgr").unwrap();
-    // let mut pictures: HashMap<String, ?> = HashMap::new();
+
+    // get palette
+    // TODO: add as method in lgr mod, avoid .find() etc.
+    let palette_picture = lgr.picture_data
+        .iter()
+        .find(|el| el.name.to_lowercase() == "q1body.pcx")
+        .unwrap();
+
+    let reader = pcx::Reader::new(palette_picture.data.as_slice()).unwrap();
+    let mut palette: Vec<u8> = iter::repeat(0).take(256 * 3).collect();
+    reader.read_palette(&mut palette).unwrap();
 
     for picture in lgr.picture_data.iter() {
         let mut reader = pcx::Reader::new(picture.data.as_slice()).unwrap();
@@ -38,21 +48,62 @@ fn main() {
             pcx_pixels.extend_from_slice(&img_buffer);
         }
 
-        let mut palette: Vec<u8> = iter::repeat(0).take(256 * 3).collect();
-        reader.read_palette(&mut palette).unwrap();
+        // get transparency info
+        // TODO: use hashmaps in lgr mod for easier search, no need to keep un-ordered list (?)
+        let found_pic = lgr.picture_list
+            .iter()
+            .find(|el| el.name.to_lowercase() == picture.name.replace(".pcx", "").to_lowercase());
+        let mut is_texture = false;
+        let mut transparency = Transparency::TopLeft;
+        if let Some(pic) = found_pic {
+            transparency = pic.transparency;
+            if pic.picture_type == PictureType::Texture {
+                is_texture = true;
+            }
+        };
+
+        // special texture files handled by elma we need to check for
+        if picture.name.to_lowercase() == "qframe.pcx"
+            || picture.name.to_lowercase() == "qgrass.pcx"
+        {
+            is_texture = true;
+        }
+
+        let transparent_index = match transparency {
+            Transparency::TopLeft => pcx_pixels[0],
+            Transparency::TopRight => pcx_pixels[width - 1],
+            Transparency::BottomLeft => pcx_pixels[((width - 1) * height) - 1],
+            Transparency::BottomRight => pcx_pixels[width * height - 1],
+            _ => 0,
+        };
 
         let png_pixels: Vec<_> = pcx_pixels
             .iter()
-            .flat_map(|b| &palette[*b as usize * 3..*b as usize * 3 + 3])
-            .map(|x| *x)
+            .flat_map(|b| {
+                // only rgb part
+                let mut rgba: Vec<_> = palette[*b as usize * 3..*b as usize * 3 + 3].to_vec();
+                // add alpha based on picture properties
+                if is_texture {
+                    rgba.push(255);
+                } else if transparency == Transparency::Palette && *b == palette[0] {
+                    rgba.push(0);
+                } else if transparency != Transparency::Solid && *b == transparent_index {
+                    rgba.push(0);
+                } else {
+                    rgba.push(255);
+                }
+                rgba
+            })
             .collect();
 
+        let mut filename = String::from("test/");
+        filename.push_str(&picture.name.replace(".pcx", ".png"));
         image::save_buffer(
-            picture.name.replace(".pcx", ".png"),
+            &filename,
             &png_pixels,
             width as u32,
             height as u32,
-            image::RGB(8),
+            image::RGBA(8),
         ).unwrap();
     }
     // let opengl = OpenGL::_3_2;
