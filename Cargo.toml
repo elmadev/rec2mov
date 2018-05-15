@@ -7,3 +7,4 @@ authors = ["Roger Andersen <hexjelly@hexjelly.com>"]
 elma = "0.1.9"
 pcx = "0.2.0"
 image = "*"
+glium = "*"

@@ -1,132 +1,118 @@
-// extern crate glutin_window;
-// extern crate graphics;
-// extern crate opengl_graphics;
-// extern crate piston;
-//
-// use glutin_window::GlutinWindow as Window;
-// use graphics::rectangle::square;
-// use graphics::{clear, default_draw_state, Image};
-// use opengl_graphics::{GlGraphics, OpenGL, Texture};
-// use piston::event::*;
-// use piston::window::WindowSettings;
-// use std::path::Path;
 extern crate elma;
 extern crate image;
 extern crate pcx;
+#[macro_use]
+extern crate glium;
 
-use elma::lgr::*;
-use std::iter;
+use glium::index::PrimitiveType;
+use glium::{glutin, Surface};
 
-// use std::collections::HashMap;
+mod png;
+use png::*;
 
 fn main() {
-    // let's start by converting pcx to png
-    let lgr = LGR::load("Default.lgr").unwrap();
+    let pic_data = convert_pcx("Default.lgr");
+    let (rgba, width, height) = pic_data.get("tree3.pcx").unwrap();
 
-    // get palette
-    // TODO: add as method in lgr mod, avoid .find() etc.
-    let palette_picture = lgr.picture_data
-        .iter()
-        .find(|el| el.name.to_lowercase() == "q1body.pcx")
-        .unwrap();
+    // building the display, ie. the main object
+    let events_loop = glutin::EventsLoop::new();
+    let window = glutin::WindowBuilder::new();
+    let context = glutin::ContextBuilder::new().with_vsync(true);
+    let display = glium::Display::new(window, context, &events_loop).unwrap();
 
-    let reader = pcx::Reader::new(palette_picture.data.as_slice()).unwrap();
-    let mut palette: Vec<u8> = iter::repeat(0).take(256 * 3).collect();
-    reader.read_palette(&mut palette).unwrap();
+    let image = glium::texture::RawImage2d::from_raw_rgba_reversed(rgba, (*width, *height));
+    let opengl_texture = glium::texture::CompressedSrgbTexture2d::new(&display, image).unwrap();
 
-    for picture in lgr.picture_data.iter() {
-        let mut reader = pcx::Reader::new(picture.data.as_slice()).unwrap();
-        let width = reader.width() as usize;
-        let height = reader.height() as usize;
-        // dumb thing requires buffer that is img width, so fill capacity up to length
-        let mut img_buffer: Vec<u8> = iter::repeat(0).take(width).collect();
-
-        // iterate through rows in pcx
-        let mut pcx_pixels = Vec::with_capacity(width * height);
-        for _y in 0..height {
-            reader.next_row_paletted(&mut img_buffer).unwrap();
-            pcx_pixels.extend_from_slice(&img_buffer);
+    // building the vertex buffer, which contains all the vertices that we will draw
+    let vertex_buffer = {
+        #[derive(Copy, Clone)]
+        struct Vertex {
+            position: [f32; 2],
+            tex_coords: [f32; 2],
         }
 
-        // get transparency info
-        // TODO: use hashmaps in lgr mod for easier search, no need to keep un-ordered list (?)
-        let found_pic = lgr.picture_list
-            .iter()
-            .find(|el| el.name.to_lowercase() == picture.name.replace(".pcx", "").to_lowercase());
-        let mut is_texture = false;
-        let mut transparency = Transparency::TopLeft;
-        if let Some(pic) = found_pic {
-            transparency = pic.transparency;
-            if pic.picture_type == PictureType::Texture {
-                is_texture = true;
-            }
-        };
+        implement_vertex!(Vertex, position, tex_coords);
 
-        // special texture files handled by elma we need to check for
-        if picture.name.to_lowercase() == "qframe.pcx"
-            || picture.name.to_lowercase() == "qgrass.pcx"
-        {
-            is_texture = true;
-        }
+        glium::VertexBuffer::new(
+            &display,
+            &[
+                Vertex {
+                    position: [-1.0, -1.0],
+                    tex_coords: [0.0, 0.0],
+                },
+                Vertex {
+                    position: [-1.0, 1.0],
+                    tex_coords: [0.0, 1.0],
+                },
+                Vertex {
+                    position: [1.0, 1.0],
+                    tex_coords: [1.0, 1.0],
+                },
+                Vertex {
+                    position: [1.0, -1.0],
+                    tex_coords: [1.0, 0.0],
+                },
+            ],
+        ).unwrap()
+    };
 
-        let transparent_index = match transparency {
-            Transparency::TopLeft => pcx_pixels[0],
-            Transparency::TopRight => pcx_pixels[width - 1],
-            Transparency::BottomLeft => pcx_pixels[((width - 1) * height) - 1],
-            Transparency::BottomRight => pcx_pixels[width * height - 1],
-            _ => 0,
-        };
+    // building the index buffer
+    let index_buffer =
+        glium::IndexBuffer::new(&display, PrimitiveType::TriangleStrip, &[1 as u16, 2, 0, 3])
+            .unwrap();
 
-        let png_pixels: Vec<_> = pcx_pixels
-            .iter()
-            .flat_map(|b| {
-                // only rgb part
-                let mut rgba: Vec<_> = palette[*b as usize * 3..*b as usize * 3 + 3].to_vec();
-                // add alpha based on picture properties
-                if is_texture {
-                    rgba.push(255);
-                } else if transparency == Transparency::Palette && *b == palette[0] {
-                    rgba.push(0);
-                } else if transparency != Transparency::Solid && *b == transparent_index {
-                    rgba.push(0);
-                } else {
-                    rgba.push(255);
+    // compiling shaders and linking them together
+    let program = program!(&display,
+        140 => {
+            vertex: "
+                #version 140
+                uniform mat4 matrix;
+                in vec2 position;
+                in vec2 tex_coords;
+                out vec2 v_tex_coords;
+                void main() {
+                    gl_Position = matrix * vec4(position, 0.0, 1.0);
+                    v_tex_coords = tex_coords;
                 }
-                rgba
-            })
-            .collect();
+            ",
 
-        let mut filename = String::from("test/");
-        filename.push_str(&picture.name.replace(".pcx", ".png"));
-        image::save_buffer(
-            &filename,
-            &png_pixels,
-            width as u32,
-            height as u32,
-            image::RGBA(8),
-        ).unwrap();
+            fragment: "
+                #version 140
+                uniform sampler2D tex;
+                in vec2 v_tex_coords;
+                out vec4 f_color;
+                void main() {
+                    f_color = texture(tex, v_tex_coords);
+                }
+            "
+        },
+    ).unwrap();
+
+    // the main loop
+    'main: loop {
+        // building the uniforms
+        let uniforms = uniform! {
+            matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0f32]
+            ],
+            tex: &opengl_texture
+        };
+
+        // drawing a frame
+        let mut target = display.draw();
+        target.clear_color(0.5, 0.5, 0.5, 1.0);
+        target
+            .draw(
+                &vertex_buffer,
+                &index_buffer,
+                &program,
+                &uniforms,
+                &Default::default(),
+            )
+            .unwrap();
+        target.finish().unwrap();
     }
-    // let opengl = OpenGL::_3_2;
-    // let mut gl = GlGraphics::new(opengl);
-    // let window = Window::new(
-    //     opengl,
-    //     WindowSettings::new("Example", [600, 400]).exit_on_esc(true),
-    // );
-    //
-    // //Create the image object and attach a square Rectangle object inside.
-    // let image = Image::new().rect(square(0.0, 0.0, 200.0));
-    // //A texture to use with the image
-    // let texture = Texture::from_path(Path::new("Example.png")).unwrap();
-    //
-    // //Main loop
-    // for e in window.events() {
-    //     if let Some(r) = e.render_args() {
-    //         gl.draw(r.viewport(), |c, gl| {
-    //             //Clear the screen
-    //             clear([0.0, 0.0, 0.0, 1.0], gl);
-    //             //Draw the image with the texture
-    //             image.draw(&texture, default_draw_state(), c.transform, gl);
-    //         });
-    //     }
-    // }
 }
