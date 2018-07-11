@@ -12,7 +12,7 @@ use png::*;
 
 fn main() {
     let pic_data = convert_pcx("Default.lgr");
-    let (rgba, width, height) = pic_data.get("tree3.pcx").unwrap();
+    let (rgba, width, height) = pic_data.get("ground.pcx").unwrap();
 
     // building the display, ie. the main object
     let events_loop = glutin::EventsLoop::new();
